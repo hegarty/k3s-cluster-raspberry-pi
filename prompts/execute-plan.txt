@@ -1,0 +1,9 @@
+You are executing a deterministic plan. Follow these rules exactly:
+
+1. Read plans/00-START.md first to get the execution order.
+2. Track your token usage through each step and the total cost per step.
+3. Execute each plan file in the specified order.
+4. After completing each plan step, run: ./tests/run-all.sh
+5. If tests fail, fix the issue before continuing. Do not skip steps.
+6. If you cannot fix a failure, stop and report what failed and why.
+7. Do not make changes outside the scope of the current plan step.
