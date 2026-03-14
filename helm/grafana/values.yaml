@@ -1,0 +1,59 @@
+# Grafana values for single-node k3s cluster on Raspberry Pi LAN
+
+persistence:
+  enabled: true
+  storageClassName: local-path
+  size: 1Gi
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Expose via ClusterIP — accessed through Traefik ingress
+service:
+  type: ClusterIP
+
+# Default admin credentials — override via Ansible vault in production
+adminUser: admin
+adminPassword: changeme
+
+# Pre-configured datasource pointing at in-cluster Prometheus
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-kube-prometheus-prometheus.monitoring.svc:9090
+        access: proxy
+        isDefault: true
+
+# Pre-load a basic node overview dashboard
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: default
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        options:
+          path: /var/lib/grafana/dashboards/default
+
+dashboards:
+  default:
+    node-exporter:
+      gnetId: 1860        # Node Exporter Full — community dashboard
+      revision: 37
+      datasource: Prometheus
+
+ingress:
+  enabled: true
+  ingressClassName: traefik
+  hosts:
+    - grafana.pi-1.local

@@ -1,0 +1,68 @@
+# kube-prometheus-stack values — tuned for Raspberry Pi resource constraints
+# Reference: https://github.com/prometheus-community/helm-charts
+
+# Disable components not needed on a single-node edge cluster
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+alertmanager:
+  enabled: false
+
+grafana:
+  enabled: false   # Grafana is deployed separately via helm/grafana
+
+prometheusOperator:
+  resources:
+    limits:
+      cpu: 200m
+      memory: 200Mi
+    requests:
+      cpu: 100m
+      memory: 100Mi
+
+prometheus:
+  prometheusSpec:
+    # Retain 7 days of metrics — enough for a single-node edge cluster
+    retention: 7d
+    # Use local-path storage; one single replica
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 5Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 200m
+        memory: 256Mi
+    replicas: 1
+
+kube-state-metrics:
+  resources:
+    limits:
+      cpu: 100m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+nodeExporter:
+  resources:
+    limits:
+      cpu: 100m
+      memory: 64Mi
+    requests:
+      cpu: 50m
+      memory: 32Mi
