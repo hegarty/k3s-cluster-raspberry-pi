@@ -1,0 +1,119 @@
+---
+# bootstrap.yml
+# Prepares Raspberry Pi OS for k3s:
+#   - Disables swap
+#   - Enables required kernel cgroup parameters
+#   - Loads br_netfilter and overlay kernel modules
+#   - Configures sysctl for Kubernetes networking
+#   - Reboots if kernel cmdline changed (cgroups)
+
+- name: Bootstrap Raspberry Pi for k3s
+  hosts: k3s_server
+  become: true
+  gather_facts: true
+
+  vars:
+    cmdline_path: /boot/firmware/cmdline.txt   # Pi 5 default; Pi 4 uses /boot/cmdline.txt
+    required_cmdline_params:
+      - cgroup_enable=cpuset
+      - cgroup_enable=memory
+      - cgroup_memory=1
+
+  tasks:
+
+    # ── Swap ─────────────────────────────────────────────────────────────────
+    - name: Disable swap immediately
+      command: swapoff -a
+      changed_when: false
+
+    - name: Remove swap entries from /etc/fstab
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\s+swap\s+.*)$'
+        replace: '# \1'
+
+    - name: Disable dphys-swapfile service (if present)
+      systemd:
+        name: dphys-swapfile
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Disable zram swap (Debian 13 default)
+      command: swapoff /dev/zram0
+      failed_when: false
+      changed_when: false
+
+    - name: Disable systemd-zram-setup service (if present)
+      systemd:
+        name: "systemd-zram-setup@zram0.service"
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    # ── Kernel cmdline (cgroups) ──────────────────────────────────────────────
+    - name: Read current cmdline
+      slurp:
+        src: "{{ cmdline_path }}"
+      register: cmdline_content
+
+    - name: Set cmdline fact
+      set_fact:
+        current_cmdline: "{{ cmdline_content.content | b64decode | trim }}"
+
+    - name: Append missing cgroup parameters to cmdline
+      vars:
+        missing: >-
+          {{ required_cmdline_params
+             | reject('in', current_cmdline.split())
+             | list }}
+      block:
+        - name: Update cmdline with missing params
+          copy:
+            dest: "{{ cmdline_path }}"
+            content: "{{ current_cmdline }} {{ missing | join(' ') }}\n"
+          when: missing | length > 0
+          register: cmdline_updated
+
+        - name: Schedule reboot if cmdline was updated
+          set_fact:
+            reboot_required: true
+          when: cmdline_updated.changed | default(false)
+
+    # ── Kernel modules ────────────────────────────────────────────────────────
+    - name: Ensure br_netfilter and overlay modules load at boot
+      copy:
+        dest: /etc/modules-load.d/k3s.conf
+        content: |
+          br_netfilter
+          overlay
+
+    - name: Load br_netfilter now
+      modprobe:
+        name: br_netfilter
+        state: present
+
+    - name: Load overlay now
+      modprobe:
+        name: overlay
+        state: present
+
+    # ── sysctl ────────────────────────────────────────────────────────────────
+    - name: Configure sysctl for Kubernetes networking
+      sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: true
+        sysctl_file: /etc/sysctl.d/k3s.conf
+      loop:
+        - { key: net.bridge.bridge-nf-call-iptables,  value: "1" }
+        - { key: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+        - { key: net.ipv4.ip_forward,                 value: "1" }
+
+    # ── Reboot if needed ──────────────────────────────────────────────────────
+    - name: Reboot if kernel cmdline was updated
+      reboot:
+        reboot_timeout: 300
+        msg: "Rebooting to apply cgroup kernel parameters"
+      when: reboot_required | default(false)

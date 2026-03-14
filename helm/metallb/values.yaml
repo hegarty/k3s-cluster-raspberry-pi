@@ -1,0 +1,26 @@
+# MetalLB values for single-node k3s cluster on Raspberry Pi LAN
+#
+# Set metallb_address_pool in inventory/hosts.yml or pass via --extra-vars
+# to define the LAN IP range MetalLB will allocate from.
+# Example: 192.168.1.200-192.168.1.220
+
+controller:
+  resources:
+    limits:
+      cpu: 100m
+      memory: 100Mi
+    requests:
+      cpu: 50m
+      memory: 50Mi
+
+speaker:
+  resources:
+    limits:
+      cpu: 100m
+      memory: 100Mi
+    requests:
+      cpu: 50m
+      memory: 50Mi
+
+# IPAddressPool and L2Advertisement are created by the apps.yml playbook
+# after MetalLB CRDs are available.

@@ -1,0 +1,178 @@
+---
+# apps.yml
+# Deploys the application layer onto the k3s cluster via Helm:
+#   1. MetalLB          — bare-metal LoadBalancer for LAN services
+#   2. metallb-config   — IPAddressPool and L2Advertisement (local chart)
+#   3. kube-prometheus-stack — cluster observability
+#   4. Grafana          — dashboards
+#
+# Constraints:
+#   - All installations are via Helm (no inline kubectl apply)
+#   - Helm chart values live in /helm/<chart>/values.yaml
+#   - Local charts live in /helm/<chart>/
+
+- name: Deploy application layer via Helm
+  hosts: k3s_server
+  become: true
+  gather_facts: true
+
+  vars:
+    kubeconfig: /etc/rancher/k3s/k3s.yaml
+    helm_bin: /usr/local/bin/helm
+    metallb_address_pool: "192.168.1.200-192.168.1.220"
+    charts_dest: /tmp/helm-charts
+
+  tasks:
+
+    # ── Prerequisites ─────────────────────────────────────────────────────────
+    - name: Verify k3s node is Ready before deploying
+      command: k3s kubectl get nodes --no-headers
+      register: node_check
+      failed_when: "'Ready' not in node_check.stdout or 'NotReady' in node_check.stdout"
+      changed_when: false
+
+    - name: Check if Helm is installed
+      stat:
+        path: "{{ helm_bin }}"
+      register: helm_stat
+
+    - name: Install Helm if not present
+      shell: |
+        set -euo pipefail
+        curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+      when: not helm_stat.stat.exists
+      args:
+        executable: /bin/bash
+
+    # ── Copy local charts to remote ───────────────────────────────────────────
+    - name: Ensure remote chart staging directory exists
+      file:
+        path: "{{ charts_dest }}"
+        state: directory
+        mode: "0755"
+
+    - name: Copy metallb-config chart to remote
+      copy:
+        src: ../helm/metallb-config/
+        dest: "{{ charts_dest }}/metallb-config/"
+
+    - name: Copy prometheus values to remote
+      copy:
+        src: ../helm/prometheus/values.yaml
+        dest: /tmp/prometheus-values.yaml
+
+    - name: Copy grafana values to remote
+      copy:
+        src: ../helm/grafana/values.yaml
+        dest: /tmp/grafana-values.yaml
+
+    # ── Helm repos ────────────────────────────────────────────────────────────
+    - name: Add MetalLB Helm repo
+      command: helm repo add metallb https://metallb.github.io/metallb
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Add Prometheus community Helm repo
+      command: helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Add Grafana Helm repo
+      command: helm repo add grafana https://grafana.github.io/helm-charts
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    - name: Update Helm repos
+      command: helm repo update
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+
+    # ── Namespaces ────────────────────────────────────────────────────────────
+    - name: Create metallb-system namespace
+      shell: >
+        k3s kubectl create namespace metallb-system --dry-run=client -o yaml
+        | k3s kubectl apply -f -
+      changed_when: false
+
+    - name: Create monitoring namespace
+      shell: >
+        k3s kubectl create namespace monitoring --dry-run=client -o yaml
+        | k3s kubectl apply -f -
+      changed_when: false
+
+    # ── MetalLB ───────────────────────────────────────────────────────────────
+    - name: Copy MetalLB values to remote
+      copy:
+        src: ../helm/metallb/values.yaml
+        dest: /tmp/metallb-values.yaml
+
+    - name: Install or upgrade MetalLB
+      command: >
+        helm upgrade --install metallb metallb/metallb
+        --namespace metallb-system
+        --values /tmp/metallb-values.yaml
+        --wait
+        --timeout 5m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for MetalLB controller to be ready
+      command: >
+        k3s kubectl rollout status deployment/metallb-controller
+        -n metallb-system --timeout=120s
+      changed_when: false
+
+    - name: Install or upgrade metallb-config (IPAddressPool + L2Advertisement)
+      command: >
+        helm upgrade --install metallb-config {{ charts_dest }}/metallb-config
+        --namespace metallb-system
+        --set addressPool={{ metallb_address_pool }}
+        --wait
+        --timeout 2m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    # ── Prometheus ────────────────────────────────────────────────────────────
+    - name: Install or upgrade kube-prometheus-stack
+      command: >
+        helm upgrade --install prometheus prometheus-community/kube-prometheus-stack
+        --namespace monitoring
+        --values /tmp/prometheus-values.yaml
+        --wait
+        --timeout 10m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    # ── Grafana ───────────────────────────────────────────────────────────────
+    - name: Install or upgrade Grafana
+      command: >
+        helm upgrade --install grafana grafana/grafana
+        --namespace monitoring
+        --values /tmp/grafana-values.yaml
+        --wait
+        --timeout 5m
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    # ── Verification ──────────────────────────────────────────────────────────
+    - name: Show all pods
+      command: k3s kubectl get pods -A
+      register: pods_output
+      changed_when: false
+
+    - name: Display pod status
+      debug:
+        msg: "{{ pods_output.stdout_lines }}"
+
+    - name: Show all services
+      command: k3s kubectl get svc -A
+      register: svc_output
+      changed_when: false
+
+    - name: Display service status
+      debug:
+        msg: "{{ svc_output.stdout_lines }}"
