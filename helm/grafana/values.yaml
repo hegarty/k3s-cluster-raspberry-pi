@@ -5,6 +5,10 @@ persistence:
   storageClassName: local-path
   size: 1Gi
 
+# Disable the init container that chowns the PVC — it fails with
+# "Permission denied" on files already written by a running Grafana pod.
+initChownData: false
+
 resources:
   limits:
     cpu: 200m
